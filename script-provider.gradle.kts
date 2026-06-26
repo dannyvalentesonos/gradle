@@ -19,11 +19,12 @@ abstract class GradleScriptSource : ValueSource<String, GradleScriptSource.Param
         val targetFile: RegularFileProperty
 
         // optional
-        //val logLevel: Property<LogLevel>
+        val logLevel: Property<LogLevel>
     }
 
     override fun obtain(): String? {
-        //val logLevel = parameters.logLevel.orElse(LogLevel.INFO).get()
+        val logger = Logging.getLogger(GradleScriptSource::class.java)
+        val logLevel = parameters.logLevel.orElse(LogLevel.INFO).get()
 
         val repo = parameters.repo.get()
         val path = parameters.path.get()
@@ -48,7 +49,7 @@ abstract class GradleScriptSource : ValueSource<String, GradleScriptSource.Param
         }
 
         try {
-            //logger.log(logLevel, "Downloading $url")
+            logger.log(logLevel, "Downloading $url")
             val response = HttpClient.newHttpClient()
                 .send(builder.build(), HttpResponse.BodyHandlers.ofString())
 
@@ -68,7 +69,7 @@ abstract class GradleScriptSource : ValueSource<String, GradleScriptSource.Param
                 else -> if (!targetFile.exists()) {
                     throw GradleException("Failed to download $path@$version from $repo (HTTP ${response.statusCode()})")
                 } else {
-                    //logger.warn("WARNING: $path@$version from $repo returned HTTP ${response.statusCode()}; using cached $targetFile")
+                    logger.warn("WARNING: $path@$version from $repo returned HTTP ${response.statusCode()}; using cached $targetFile")
                 }
             }
         } catch (e: Throwable) {
@@ -85,7 +86,8 @@ extra["downloadGradleScript"] = fun(repo: String,
                                     path: String,
                                     version: String,
                                     githubToken: String,
-                                    targetFile: RegularFile) {
+                                    targetFile: RegularFile,
+                                    logLevel: LogLevel) {
     // Calling .get() records the fetched content as a configuration-cache input,
     // so obtain() re-runs every build and a changed remote ref invalidates the
     // cache (and re-runs this body's apply) without a manual version bump.
@@ -95,8 +97,6 @@ extra["downloadGradleScript"] = fun(repo: String,
         parameters.version.set(version)
         parameters.githubToken.set(githubToken)
         parameters.targetFile.set(targetFile)
-        //parameters.logLevel.set(logLevel)
+        parameters.logLevel.set(logLevel)
     }.get()
-
-    //apply(from = cacheTo)
 }
