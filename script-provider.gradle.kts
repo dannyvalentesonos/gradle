@@ -1,3 +1,5 @@
+@file:Suppress("UNCHECKED_CAST")
+
 import org.gradle.api.provider.ValueSource
 import org.gradle.api.provider.ValueSourceParameters
 import org.gradle.api.provider.Property
@@ -78,21 +80,51 @@ abstract class GradleScriptSource : ValueSource<String, DownloaderParameters> {
     }
 }
 
+fun <T> createParameterProvider(paramName: String, properties: Map<String, Any>) = providers.provider {
+    val param = properties[paramName] as () -> T
+    param()
+}
+
+fun createScriptProvider(properties: Map<String, Any>) = providers.of(GradleScriptSource::class.java) {
+    parameters.repo.set(createParameterProvider<String>("repo", properties))
+    parameters.path.set(createParameterProvider<String>("path", properties))
+    parameters.version.set(createParameterProvider<String>("version", properties))
+    parameters.githubToken.set(createParameterProvider<String>("githubToken", properties))
+    parameters.targetFile.set(createParameterProvider<RegularFile>("targetFile", properties))
+    parameters.logLevel.set(createParameterProvider<LogLevel>("logLevel", properties))
+}
+
+// Params needed for the providers
+extra["downloadGradleScriptProviderParams"] = mutableMapOf<Provider<*>, MutableMap<String, Any>>()
+
+// create 5 providers, which should be more than enough for all scripts needed to be downloaded
+extra["downloadGradleScriptProviders"] = ArrayDeque(List(5) {
+    val providerParams = extra["downloadGradleScriptProviderParams"] as MutableMap<Provider<*>, MutableMap<String, Any>>
+    val paramMap = mutableMapOf<String, Any>()
+    val provider = createScriptProvider(paramMap)
+    providerParams[provider] = paramMap
+    provider
+})
+
 extra["downloadGradleScript"] = fun(repo: String,
                                     path: String,
                                     version: String,
                                     githubToken: String,
                                     targetFile: RegularFile,
                                     logLevel: LogLevel) {
-    val scriptProvider = providers.of(GradleScriptSource::class.java) {
-        parameters.repo.set(repo)
-        parameters.path.set(path)
-        parameters.version.set(version)
-        parameters.githubToken.set(githubToken)
-        parameters.targetFile.set(targetFile)
-        parameters.logLevel.set(logLevel)
-    }
+    val providers = extra["downloadGradleScriptProviders"] as ArrayDeque<Provider<*>>
+    val provider = providers.removeFirstOrNull()
+    provider?.let {
+        val providerParams = extra["downloadGradleScriptProviderParams"] as MutableMap<Provider<*>, MutableMap<String, Any>>
+        val params = providerParams[it]!!
+        params["repo"] = { repo }
+        params["path"] = { path }
+        params["version"] = { version }
+        params["githubToken"] = { githubToken }
+        params["targetFile"] = { targetFile }
+        params["logLevel"] = { logLevel }
 
-    // CRITICAL: Calling .get() triggers the download and registers the ETag as a configuration input
-    scriptProvider.get()
+        // CRITICAL: Calling .get() triggers the download and registers the ETag as a configuration input
+        it.get()
+    }
 }
