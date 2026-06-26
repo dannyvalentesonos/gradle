@@ -99,6 +99,7 @@ extra["downloadGradleScriptProviderParams"] = mutableMapOf<Provider<*>, MutableM
 
 // create 5 providers, which should be more than enough for all scripts needed to be downloaded
 extra["downloadGradleScriptProviders"] = ArrayDeque(List(5) {
+    logger.warn("Creating the provider")
     val providerParams = extra["downloadGradleScriptProviderParams"] as MutableMap<Provider<*>, MutableMap<String, Any>>
     val paramMap = mutableMapOf<String, Any>()
     val provider = createScriptProvider(paramMap)
@@ -112,6 +113,7 @@ extra["downloadGradleScript"] = fun(repo: String,
                                     githubToken: String,
                                     targetFile: RegularFile,
                                     logLevel: LogLevel) {
+    logger.warn("Getting the provider")
     val providers = extra["downloadGradleScriptProviders"] as ArrayDeque<Provider<*>>
     val provider = providers.removeFirstOrNull()
     provider?.let {
