@@ -60,7 +60,15 @@ abstract class GradleScriptSource : ValueSource<String, GradleScriptSource.Param
         val githubToken = parameters.githubToken.get()
         val targetFile = parameters.targetFile.get().asFile
 
-        val url = "https://api.github.com/repos/$repo/contents/$path?ref=$version"
+        // Using the api.github.com API is the preferred method, however, it's THREE times slower!
+        // TODO: Look into whether we want to go back to the api.github.com url
+        //       To test it, run `curl -H "Authorization: Bearer $GITHUB_TOKEN" \
+        //                             -H "Accept: application/vnd.github.raw" \
+        //                             -H "If-None-Match: \"<etag>\"" \
+        //                             -o /dev/null -w "%{http_code} %{time_total}\n" \
+        //                             <url>
+        //val url = "https://api.github.com/repos/$repo/contents/$path?ref=$version"
+        val url = "https://raw.githubusercontent.com/$repo/$version/$path"
         // Sidecar file holding the ETag of the currently cached download.
         val etagFile = File(targetFile.parentFile, "${targetFile.name}.etag")
 
