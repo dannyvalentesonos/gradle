@@ -1,5 +1,3 @@
-@file:Suppress("UNCHECKED_CAST")
-
 import org.gradle.api.file.RegularFile
 import org.gradle.api.provider.ValueSource
 import org.gradle.api.provider.ValueSourceParameters
