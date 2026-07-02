@@ -76,7 +76,7 @@ fun downloadGradleScript(logger: Logger,
                          path: String,
                          version: String,
                          githubToken: String,
-                         targetFile: RegularFile,
+                         targetFile: File,
                          checkRemote: Boolean,
                          forceDownload: Boolean = false): String {
     // Using the api.github.com API is the preferred method, however, it's THREE times slower!
@@ -190,7 +190,7 @@ extra["downloadGradleScript"] = fun(repo: String,
             path = path,
             version = version,
             githubToken = githubToken,
-            targetFile = targetFile,
+            targetFile = targetFile.asFile,
             checkRemote = checkRemote,
             forceDownload = forceDownload,
         )
