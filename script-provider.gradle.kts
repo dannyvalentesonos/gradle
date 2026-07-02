@@ -59,7 +59,6 @@ abstract class GradleScriptSource : ValueSource<String, GradleScriptSource.Param
             version = parameters.version.get(),
             githubToken = parameters.githubToken.get(),
             targetFile = parameters.targetFile.get().asFile,
-            checkRemote = true,
         )
     }
 
@@ -77,7 +76,7 @@ abstract class GradleScriptSource : ValueSource<String, GradleScriptSource.Param
                                  version: String,
                                  githubToken: String,
                                  targetFile: File,
-                                 checkRemote: Boolean,
+                                 checkRemote: Boolean = true,
                                  forceDownload: Boolean = false): String {
             // Using the api.github.com API is the preferred method, however, it's THREE times slower!
             // TODO: Look into whether we want to go back to the api.github.com url
@@ -155,8 +154,58 @@ abstract class GradleScriptSource : ValueSource<String, GradleScriptSource.Param
  * Convenience entry point, exposed via `extra` so it can be called from any
  * build script that applies this file:
  *
- *     val downloadGradleScript: (String, String, String, String, RegularFile, LogLevel) -> Unit by extra
- *     downloadGradleScript("Sonos-Inc/gradle", "scripts/common.gradle.kts", "main", token, targetFile, LogLevel.INFO)
+ *     @Suppress("UNCHECKED_CAST")
+ *     val getGradleScriptDownloadProvider = extra["getGradleScriptDownloadProvider"]
+ *             as (String, String, String, String, RegularFile, LogLevel) -> Provider<String>
+ *     val provider = getGradleScriptDownloadProvider(
+ *         "Sonos-Inc/gradle",
+ *         "scripts/common.gradle.kts",
+ *         "main",
+ *         token,
+ *         targetFile,
+ *         LogLevel.INFO
+ *     )
+ *
+ * Returns a provider which can be used to download `path` at `version` from `repo` into `targetFile`,
+ * returning the ETag of the remote (or cached) file and reusing the on-disk cache when the
+ * remote ref is unchanged. See [GradleScriptSource] for the caching details.
+ *
+ * Note: calling .get() on the returned provider records the fetched content as a
+ * configuration-cache input, so obtain() re-runs every build and a changed remote ref invalidates
+ * the cache (and re-runs this body's apply) without a manual version bump.
+ */
+extra["getGradleScriptDownloadProvider"] = fun(repo: String,
+                                               path: String,
+                                               version: String,
+                                               githubToken: String,
+                                               targetFile: RegularFile,
+                                               logLevel: LogLevel): Provider<String> {
+    return providers.of(GradleScriptSource::class.java) {
+        parameters.repo.set(repo)
+        parameters.path.set(path)
+        parameters.version.set(version)
+        parameters.githubToken.set(githubToken)
+        parameters.targetFile.set(targetFile)
+        parameters.logLevel.set(logLevel)
+    }
+}
+
+/**
+ * Convenience entry point, exposed via `extra` so it can be called from any
+ * build script that applies this file:
+ *
+ *     @Suppress("UNCHECKED_CAST")
+ *     val downloadGradleScript = extra["downloadGradleScript"]
+ *             as (String, String, String, String, RegularFile, Boolean, LogLevel) -> Unit
+ *     downloadGradleScript(
+ *         "Sonos-Inc/gradle",
+ *         "scripts/common.gradle.kts",
+ *         "main",
+ *         token,
+ *         targetFile,
+ *         false, // forceDownload
+ *         LogLevel.INFO
+ *     )
  *
  * Downloads `path` at `version` from `repo` into `targetFile`, reusing the
  * on-disk cache when the remote ref is unchanged. See [GradleScriptSource]
@@ -167,34 +216,17 @@ extra["downloadGradleScript"] = fun(repo: String,
                                     version: String,
                                     githubToken: String,
                                     targetFile: RegularFile,
-                                    checkRemote: Boolean,
                                     forceDownload: Boolean,
                                     logLevel: LogLevel) {
-    // if checkRemote is true, then we want to use our GradleScriptSource which
-    // will cause the Configuration phase to run again if the remote file changes.
-    if (checkRemote) {
-        // Calling .get() records the fetched content as a configuration-cache input,
-        // so obtain() re-runs every build and a changed remote ref invalidates the
-        // cache (and re-runs this body's apply) without a manual version bump.
-        providers.of(GradleScriptSource::class.java) {
-            parameters.repo.set(repo)
-            parameters.path.set(path)
-            parameters.version.set(version)
-            parameters.githubToken.set(githubToken)
-            parameters.targetFile.set(targetFile)
-            parameters.logLevel.set(logLevel)
-        }.get()
-    } else {
-        GradleScriptSource.downloadGradleScript(
-            logger = logger,
-            logLevel = logLevel,
-            repo = repo,
-            path = path,
-            version = version,
-            githubToken = githubToken,
-            targetFile = targetFile.asFile,
-            checkRemote = checkRemote,
-            forceDownload = forceDownload,
-        )
-    }
+    GradleScriptSource.downloadGradleScript(
+        logger = logger,
+        logLevel = logLevel,
+        repo = repo,
+        path = path,
+        version = version,
+        githubToken = githubToken,
+        targetFile = targetFile.asFile,
+        checkRemote = false,
+        forceDownload = forceDownload,
+    )
 }
