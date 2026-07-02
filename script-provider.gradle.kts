@@ -49,44 +49,64 @@ abstract class GradleScriptSource : ValueSource<String, GradleScriptSource.Param
     }
 
     override fun obtain(): String? {
-        // A fresh logger per call: ValueSource instances are not guaranteed to
-        // be reused, and Logging.getLogger is cheap.
-        val logger = Logging.getLogger(GradleScriptSource::class.java)
-        val logLevel = parameters.logLevel.orElse(LogLevel.INFO).get()
+        return downloadGradleScript(
+            // A fresh logger per call: ValueSource instances are not guaranteed to
+            // be reused, and Logging.getLogger is cheap.
+            logger = Logging.getLogger(GradleScriptSource::class.java),
+            logLevel = parameters.logLevel.orElse(LogLevel.INFO).get(),
+            repo = parameters.repo.get(),
+            path = parameters.path.get(),
+            version = parameters.version.get(),
+            githubToken = parameters.githubToken.get(),
+            targetFile = parameters.targetFile.get().asFile,
+            checkRemote = true,
+        )
+    }
+}
 
-        val repo = parameters.repo.get()
-        val path = parameters.path.get()
-        val version = parameters.version.get()
-        val githubToken = parameters.githubToken.get()
-        val targetFile = parameters.targetFile.get().asFile
+/**
+ * The actual function that does the downloading
+ *
+ * Use the `downloadGradleScript` helper (registered on `extra` below) instead
+ * of trying to call this directly.
+ */
+fun downloadGradleScript(logger: Logger,
+                         logLevel: LogLevel,
+                         repo: String,
+                         path: String,
+                         version: String,
+                         githubToken: String,
+                         targetFile: RegularFile,
+                         checkRemote: Boolean,
+                         forceDownload: Boolean = false): String {
+    // Using the api.github.com API is the preferred method, however, it's THREE times slower!
+    // TODO: Look into whether we want to go back to the api.github.com url
+    //       To test it, run `curl -H "Authorization: Bearer $GITHUB_TOKEN" \
+    //                             -H "Accept: application/vnd.github.raw" \
+    //                             -H "If-None-Match: \"<etag>\"" \
+    //                             -o /dev/null -w "%{http_code} %{time_total}\n" \
+    //                             <url>
+    //val url = "https://api.github.com/repos/$repo/contents/$path?ref=$version"
+    val url = "https://raw.githubusercontent.com/$repo/$version/$path"
+    // Sidecar file holding the ETag of the currently cached download.
+    val etagFile = File(targetFile.parentFile, "${targetFile.name}.etag")
 
-        // Using the api.github.com API is the preferred method, however, it's THREE times slower!
-        // TODO: Look into whether we want to go back to the api.github.com url
-        //       To test it, run `curl -H "Authorization: Bearer $GITHUB_TOKEN" \
-        //                             -H "Accept: application/vnd.github.raw" \
-        //                             -H "If-None-Match: \"<etag>\"" \
-        //                             -o /dev/null -w "%{http_code} %{time_total}\n" \
-        //                             <url>
-        //val url = "https://api.github.com/repos/$repo/contents/$path?ref=$version"
-        val url = "https://raw.githubusercontent.com/$repo/$version/$path"
-        // Sidecar file holding the ETag of the currently cached download.
-        val etagFile = File(targetFile.parentFile, "${targetFile.name}.etag")
+    val builder = HttpRequest.newBuilder()
+        .uri(URI.create(url))
+        .header("Authorization", "Bearer $githubToken")
+        // Ask the Contents API for the raw file bytes rather than the
+        // default JSON metadata envelope.
+        .header("Accept", "application/vnd.github.raw")
+        .GET()
 
-        val builder = HttpRequest.newBuilder()
-            .uri(URI.create(url))
-            .header("Authorization", "Bearer $githubToken")
-            // Ask the Contents API for the raw file bytes rather than the
-            // default JSON metadata envelope.
-            .header("Accept", "application/vnd.github.raw")
-            .GET()
+    var etag = ""
+    // Replay the saved ETag so an unchanged ref comes back as 304.
+    if (checkRemote && targetFile.exists() && etagFile.exists()) {
+        etag = etagFile.readText()
+        builder.header("If-None-Match", etag)
+    }
 
-        var etag = ""
-        // Replay the saved ETag so an unchanged ref comes back as 304.
-        if (targetFile.exists() && etagFile.exists()) {
-            etag = etagFile.readText()
-            builder.header("If-None-Match", etag)
-        }
-
+    if (checkRemote || !targetFile.exists() || forceDownload) {
         try {
             logger.log(logLevel, "Downloading $url")
             val response = HttpClient.newHttpClient()
@@ -97,16 +117,19 @@ abstract class GradleScriptSource : ValueSource<String, GradleScriptSource.Param
                 200 -> {
                     targetFile.parentFile?.mkdirs()
                     targetFile.writeText(response.body())
-                    response.headers().firstValue("ETag")
-                        .ifPresentOrElse({
-                            etag = it
-                            etagFile.writeText(etag)
-                        }, {
-                            // Without an ETag we cannot do conditional requests,
-                            // which would break change detection — fail loudly.
-                            throw GradleException("No ETag returned when downloading $path@$version from $repo")
-                        })
+                    if (checkRemote) {
+                        response.headers().firstValue("ETag")
+                            .ifPresentOrElse({
+                                etag = it
+                                etagFile.writeText(etag)
+                            }, {
+                                // Without an ETag we cannot do conditional requests,
+                                // which would break change detection — fail loudly.
+                                throw GradleException("No ETag returned when downloading $path@$version from $repo")
+                            })
+                    }
                 }
+
                 304 -> Unit // Cache is current.
                 // Any other status: prefer a stale cache over failing the build,
                 // but fail if we have nothing cached to fall back on.
@@ -120,10 +143,10 @@ abstract class GradleScriptSource : ValueSource<String, GradleScriptSource.Param
             // Offline / unreachable: fall back to the cache if we have one.
             if (!targetFile.exists()) throw e
         }
-
-        // Returning the ETag tells Gradle to watch this specific string for changes
-        return etag
     }
+
+    // Returning the ETag tells Gradle to watch this specific string for changes
+    return etag
 }
 
 /**
@@ -142,16 +165,34 @@ extra["downloadGradleScript"] = fun(repo: String,
                                     version: String,
                                     githubToken: String,
                                     targetFile: RegularFile,
+                                    checkRemote: Boolean,
+                                    forceDownload: Boolean,
                                     logLevel: LogLevel) {
-    // Calling .get() records the fetched content as a configuration-cache input,
-    // so obtain() re-runs every build and a changed remote ref invalidates the
-    // cache (and re-runs this body's apply) without a manual version bump.
-    providers.of(GradleScriptSource::class.java) {
-        parameters.repo.set(repo)
-        parameters.path.set(path)
-        parameters.version.set(version)
-        parameters.githubToken.set(githubToken)
-        parameters.targetFile.set(targetFile)
-        parameters.logLevel.set(logLevel)
-    }.get()
+    // if checkRemote is true, then we want to use our GradleScriptSource which
+    // will cause the Configuration phase to run again if the remote file changes.
+    if (checkRemote) {
+        // Calling .get() records the fetched content as a configuration-cache input,
+        // so obtain() re-runs every build and a changed remote ref invalidates the
+        // cache (and re-runs this body's apply) without a manual version bump.
+        providers.of(GradleScriptSource::class.java) {
+            parameters.repo.set(repo)
+            parameters.path.set(path)
+            parameters.version.set(version)
+            parameters.githubToken.set(githubToken)
+            parameters.targetFile.set(targetFile)
+            parameters.logLevel.set(logLevel)
+        }.get()
+    } else {
+        downloadGradleScript(
+            logger = logger,
+            logLevel = logLevel,
+            repo = repo,
+            path = path,
+            version = version,
+            githubToken = githubToken,
+            targetFile = targetFile,
+            checkRemote = checkRemote,
+            forceDownload = forceDownload,
+        )
+    }
 }
